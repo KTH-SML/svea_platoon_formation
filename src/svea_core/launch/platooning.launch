@@ -9,7 +9,7 @@
 	
     <arg name="nats"        default="true"/>
     <arg name="location"    default="sml"/>
-    <arg name="name"        default="svea2"/>
+    <arg name="name"        default="svea1"/>
 	
 	<group if="$(eval name == 'svea1')" >
 		<arg name="leader_name"   default="svea0"/>
@@ -69,23 +69,15 @@
 
     <!-- Start NATS -->
     <node if="$(arg nats)" name="nats_connector" pkg="nats_ros_connector" type="nats_connector.py" output="screen">
-        <remap from="$(arg name)/state" to="state"/>
         <remap from="$(arg name)/path"  to="path"/>
         <rosparam subst_value="true">
-        host: 130.237.50.52
-        srv_req_timeout: 10
+        host: sml.dedyn.io
         subscribers:
-          - $(arg name)/remote/ctrl_request
-		  - $(arg leader_name)/local_state
-		  - $(arg leader_name)/control
-		  - $(arg name)/state
+		  - /$(arg leader_name)/local_state
+		  - /$(arg leader_name)/control
         publishers:
-          - $(arg name)/state
-		  - $(arg name)/local_state
-		  - $(arg name)/control
-        service_proxies:
-          - name: ltms/verify_state
-            type: aug_demo/VerifyState
+		  - /$(arg name)/local_state
+		  - /$(arg name)/control
         </rosparam>
     </node>	
 
@@ -101,7 +93,6 @@
 
         <rosparam subst_value="true">
         name: $(arg name)
-        location: $(arg location)
         </rosparam>
     </node>
 
