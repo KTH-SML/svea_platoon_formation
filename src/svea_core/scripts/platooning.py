@@ -67,8 +67,8 @@ class svea_platoon:
         rospy.init_node("svea_platoon")
 
         ## Generate reference path
-        wp_x = [0.0, 50.0, 100.0, 150.0, 200.0, 300.0, 400.0, 450.0]
-        wp_y = [0.0, 20.0, 0.0, 10.0, 20.0, 0.0, 20.0, 10.0]
+        wp_x = [1.5, -1.5]
+        wp_y = [-2.5, 2.5]
         self.ref_path = CubicSpline2D(wp_x, wp_y)   
 
 
