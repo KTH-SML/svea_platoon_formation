@@ -9,7 +9,7 @@ from scipy.signal import savgol_filter
 import rospy
 from std_msgs.msg import Float32MultiArray as FloatArray
 from geometry_msgs.msg import PoseWithCovarianceStamped
-from tf.transformations import quaternion_from_euler
+from tf.transformations import quaternion_from_euler, euler_from_quaterion
 
 
 from svea.states import VehicleState
@@ -159,7 +159,10 @@ class svea_platoon:
         self.svea.localizer.add_callback(self.update_vehicle_state)
         self.pid_timer = time.time()
         self.svea.localizer.add_callback(self.update_pid_control)
-
+        
+        self.create_subscription_to_state()
+        
+        
         self.leader_vehicle = {"vehicle_name": index_dict[name_dict[self.vehicle_name]-1], "x":0.0, "y":0.0, "yaw":0.0, "v":0.0, "s_path":self.s_path+0.6, "yaw_path":0.0, "y_path":0.0, "kappa":0.0, "dkappa":0.0, "v_path":self.desired_velocity, "acc":0.0}
         if self.leader_vehicle["vehicle_name"] != "svea0":            
             
@@ -319,6 +322,103 @@ class svea_platoon:
         topic_name = "/" + self.vehicle_name + "/local_state"
         self.state_publisher = rospy.Publisher(topic_name, FloatArray, queue_size = 1, tcp_nodelay = True)
 
+    def create_subscription_to_state(self):
+        topic_name = "/qualisys/" + self.leader_vehicle["vehicle_name"] + "/odom"
+        rospy.Subscriber(topic_name, FloatArray, self.update_vehicle_state_mocap, tcp_nodelay = True, queue_size = 1)
+        rospy.Subscriber(topic_name, FloatArray, self.update_pid_control_mocap, tcp_nodelay = True, queue_size = 1)
+
+
+    def update_vehicle_state_mocap(self, state):
+        self.x = state.pose.pose.position.x
+        self.y = state.pose.pose.position.y
+        
+        euler = euler_from_quaterion(state.pose.pose.orientation.x, state.pose.pose.orientation.y, state.pose.pose.orientation.z, state.pose.pose.orientation.w)
+        self.yaw = euler[2]
+        self.v = np.sqrt(state.twist.twist.linear.x**2 + state.twist.twist.linear.y**2) 
+
+        self.s_path, self.x_p , self.y_p = self.ref_path.calc_closest_point_on_path(self.x, self.y)
+
+        yaw_temp = self.ref_path.calc_yaw(self.s_path)
+        
+        self.yaw_path = self.yaw - yaw_temp
+        self.y_path =  (self.x - self.x_p)*np.cos(yaw_temp+np.pi/2) + (self.y- self.y_p)*np.sin(yaw_temp+np.pi/2)
+        self.kappa = self.ref_path.calc_curvature(self.s_path)
+        self.dkappa = self.ref_path.calc_curvature_change(self.s_path)
+        self.v_path = self.v*np.cos(self.yaw_path)/(1-self.kappa*self.y_path)
+
+        local_state = [self.x, self.y, self.yaw, self.v, self.s_path, self.yaw_path, self.y_path, self.kappa, self.dkappa, self.v_path]  #wrap the local state into a FloatArray
+        local_state_msg = FloatArray(data=local_state)
+        self.state_publisher.publish(local_state_msg)
+
+        left_wall_dist = self.road_width_left - self.y_path - self.r_eta
+        right_wall_dist = self.road_width_right + self.y_path -self.r_eta 
+        
+        self.dw_sample_left.append(left_wall_dist)
+        self.dw_sample_right.append(right_wall_dist)
+        self.dw_t_sample.append(time.time())
+
+        # Parameters for Savitzky-Golay filter
+        window_length = 15  # choose an odd number, typically between 5 and 31
+        polyorder = 2  # polynomial order, typically between 2 and 5
+
+        if len(self.dw_sample_left) > window_length:
+            dw_sample_left_array = np.array(self.dw_sample_left)
+            dw_sample_right_array = np.array(self.dw_sample_right)
+            
+            # Apply Savitzky-Golay filter to smooth the distance measurements
+            dwl_smooth = savgol_filter(dw_sample_left_array, window_length, polyorder)
+            dwr_smooth = savgol_filter(dw_sample_right_array, window_length, polyorder)
+
+            # Compute the logarithm of the smoothed distance
+            log_dwl_smooth = np.log(dwl_smooth)
+            log_dwr_smooth = np.log(dwr_smooth)
+
+            # Apply Savitzky-Golay filter to estimate the first derivative of log(distance)
+            optical_flow_l = savgol_filter(log_dwl_smooth, window_length, polyorder, deriv=1, delta=self.dw_t_sample[-1]-self.dw_t_sample[-2])
+            optical_flow_r = savgol_filter(log_dwr_smooth, window_length, polyorder, deriv=1, delta=self.dw_t_sample[-1]-self.dw_t_sample[-2])
+
+            # Get the estimate at the current time (last point)
+            current_time_index = -1
+            self.opflow_wall_left = optical_flow_l[current_time_index]/self.v
+            self.opflow_wall_right = optical_flow_r[current_time_index]/self.v
+
+        
+        #add case for vehicle 1!!
+        if self.leader_vehicle["vehicle_name"] == "svea0":   
+            current_time = time.time()
+            delta_time = current_time - self.state_timer
+            self.state_timer = current_time
+            self.leader_vehicle["v"] = self.desired_velocity
+            self.leader_vehicle["v_path"] = self.desired_velocity
+            self.leader_vehicle["acc"] = 0.0
+            leader_s = self.leader_vehicle["s_path"]
+            self.leader_vehicle["s_path"] = self.leader_vehicle["s_path"] + self.leader_vehicle["v_path"] * delta_time
+            
+            ds = leader_s - self.s_path - self.r_g        
+            # Parameters for Savitzky-Golay filter
+            window_length = 15  # choose an odd number, typically between 5 and 31
+            polyorder = 2  # polynomial order, typically between 2 and 5
+
+
+            self.ds_sample.append(ds)
+            self.t_sample.append(current_time)
+            if len(self.ds_sample) > window_length:
+                ds_sample_array = np.array(self.ds_sample)
+                # Apply Savitzky-Golay filter to smooth the distance measurements
+                ds_smooth = savgol_filter(ds_sample_array, window_length, polyorder)
+
+                # Compute the logarithm of the smoothed distance
+                log_ds_smooth = np.log(ds_smooth)
+
+                # Apply Savitzky-Golay filter to estimate the first derivative of log(distance)
+                optical_flow = savgol_filter(log_ds_smooth, window_length, polyorder, deriv=1, delta=self.t_sample[-1]-self.t_sample[-2])
+
+                # Get the estimate at the current time (last point)
+                current_time_index = -1
+                self.opflow_leader = optical_flow[current_time_index]
+
+
+
     def update_vehicle_state(self, state):
         self.x = state.x
         self.y = state.y
@@ -411,6 +511,31 @@ class svea_platoon:
         delta_time = current_time - self.pid_timer
         self.pid_timer = current_time
         error = self.target_velocity - state.v
+        self.error_sum += error * delta_time
+        P = error * self.K_p
+
+        if self.error_sum > self.max_error_sum:
+            self.error_sum = self.max_error_sum
+        elif self.error_sum < - self.max_error_sum:
+            self.error_sum = - self.max_error_sum        
+
+        I = self.error_sum * self.K_i
+        correction = P + I
+        speed_val = self.target_velocity + correction
+        if speed_val <= 0:
+            speed_val = 0
+        
+        #send control to low level
+        self.svea.send_control(self.target_steering, speed_val)
+        return speed_val
+        
+    def update_pid_control_mocap(self, state):
+        current_time = time.time()
+        delta_time = current_time - self.pid_timer
+        self.pid_timer = current_time
+        
+        v = np.sqrt(state.twist.twist.linear.x**2 + state.twist.twist.linear.y**2)
+        error = self.target_velocity - v
         self.error_sum += error * delta_time
         P = error * self.K_p
 
