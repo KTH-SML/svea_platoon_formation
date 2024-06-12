@@ -8,8 +8,6 @@ import math
 import numpy as np
 import bisect
 
-import time
-
 class CubicSpline1D:
     """
     1D Cubic Spline class
@@ -311,7 +309,6 @@ class CubicSpline2D:
         max_iter = 100
         s_init = self.sx.x[index]
         s = s_init
-        start_t = time.time()
         for _ in range(max_iter):
             grad = self.dist_gradient(s, px, py)
             s_new = s - rate*grad
@@ -327,7 +324,6 @@ class CubicSpline2D:
             if abs(s_new - s) < tol:
                 break
             s = s_new
-        print("time is %s " % (start_t-time.time()))
         return s, self.sx.calc_position(s), self.sy.calc_position(s)
             
 
