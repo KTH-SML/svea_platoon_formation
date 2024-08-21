@@ -38,13 +38,13 @@
     </include>
 
     <!-- Start pure_pursuit -->
-    <node name="platooning" pkg="svea_core" type="platooning_sim.py" output="screen">
+    <node name="platooning" pkg="svea_core" type="test.py" output="screen">
         <param name="use_rviz" value="$(arg use_foxglove)"/>
         <param name="is_sim" value="$(arg is_sim)"/>
         <!-- Waypoints for floo2 map -->
         <rosparam>
             name: "svea1"
-            state: [-7.4, -15.3, 0.9] # initial state (x, y, yaw)
+            state: [-7.4, -15.3, 0.9, 0.2] # initial state (x, y, yaw)
         </rosparam>
     </node>
 </launch>

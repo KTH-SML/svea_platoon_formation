@@ -94,10 +94,12 @@ class svea_platoon:
         self.y = state.y
         self.yaw = state.yaw
         self.v = state.v
-        self.s_path, self.x_p , self.y_p = self.ref_path.calc_closest_point_on_path(self.x, self.y)
 
-        yaw_temp = self.ref_path.calc_yaw(self.s_path)
+        self.op_estimate = -0.4
+        self.log_ds_estimate = 0
         
+        self.s_path, self.x_p , self.y_p = self.ref_path.calc_closest_point_on_path(self.x, self.y)
+        yaw_temp = self.ref_path.calc_yaw(self.s_path)        
         self.yaw_path = self.yaw - yaw_temp
         self.y_path =  (self.x - self.x_p)*np.cos(yaw_temp+np.pi/2) + (self.y- self.y_p)*np.sin(yaw_temp+np.pi/2)
         self.kappa = self.ref_path.calc_curvature(self.s_path)
@@ -173,6 +175,8 @@ class svea_platoon:
             rospy.loginfo(self.SUB_IMAGE)
         else: 
             self.state_timer = rospy.get_time()
+
+        self.control_timer = rospy.get_time()
 
         self.create_control_publisher()
         self.create_state_publisher()
@@ -258,6 +262,7 @@ class svea_platoon:
         self.svea.visualize_data()
 
     def get_control(self):
+        
         tild_y = self.y_path
         tild_theta = self.yaw_path
         v = self.v
@@ -504,6 +509,7 @@ class svea_platoon:
             current_time = rospy.get_time()
             delta_time = current_time - self.state_timer
             self.state_timer = current_time
+
             self.leader_vehicle["v"] = self.desired_velocity
             self.leader_vehicle["v_path"] = self.desired_velocity
             self.leader_vehicle["acc"] = 0.0
@@ -541,9 +547,15 @@ class svea_platoon:
                 # Get the estimate at the current time (last point)
                 current_time_index = -1
                 self.opflow_leader = optical_flow[current_time_index]
-                self.opflow_leader = 0
 
-                debug_op = [ds, ds_smooth[-1], log_ds_smooth[-1], self.opflow_leader, log_ds_smooth_filter[-1]]  #wrap the local state into a FloatArray
+                alpha1 = 1
+                alpha2 = 1
+                epsilon = 0.1
+                measurement = log_ds_smooth_filter[-1]
+                self.log_ds_estimate = self.log_ds_estimate + delta_time*(self.op_estimate + (alpha1/epsilon)*(measurement - self.log_ds_estimate))
+                self.op_estimate = self.op_estimate + delta_time*((alpha2/epsilon)*(measurement - self.log_ds_estimate))
+
+                debug_op = [ds, ds_smooth[-1], log_ds_smooth[-1], self.opflow_leader, log_ds_smooth_filter[-1], self.log_ds_estimate, self.op_estimate]  #wrap the local state into a FloatArray
                 debug_msg_op = FloatArray(data=debug_op)
                 self.debug_op_publisher.publish(debug_msg_op)
                   
@@ -555,6 +567,7 @@ class svea_platoon:
         current_time = rospy.get_time()
         delta_time = current_time - self.pid_timer
         self.pid_timer = current_time
+
         error = self.target_velocity - state.v
         self.error_sum += error * delta_time
         P = error * self.K_p
