@@ -197,6 +197,7 @@ class svea_platoon:
         self.create_control_publisher()
         self.create_state_publisher()
         self.create_debug_publisher()
+        self.create_debug_op_publisher()
 
         self.pid_timer = rospy.get_time()
 
@@ -260,7 +261,26 @@ class svea_platoon:
                     self.leader_vehicle["v"] = self.desired_velocity
                     self.leader_vehicle["v_path"] = self.desired_velocity
                     self.leader_vehicle["acc"] = 0.0
+
+                    leader_s = self.leader_vehicle["s_path"]
+
                     self.leader_vehicle["s_path"] = self.leader_vehicle["s_path"] + self.leader_vehicle["v_path"] * delta_time
+
+                    ds = leader_s - self.s_path - self.r_g        
+                    alpha1 = 1
+                    alpha2 = 1
+                    epsilon = 0.1
+                    measurement = np.log(ds)
+                    self.log_ds_estimate = self.log_ds_estimate + delta_time*(self.op_estimate + (alpha1/epsilon)*(measurement - self.log_ds_estimate))
+                    self.op_estimate = self.op_estimate + delta_time*((alpha2/epsilon)*(measurement - self.log_ds_estimate))
+
+                    self.op_real = (self.leader_vehicle["v_path"] - self.v_path)/ds
+                    debug_op = [ds, measurement, self.log_ds_estimate, self.op_estimate, self.op_real]  #wrap the local state into a FloatArray
+                    debug_msg_op = FloatArray(data=debug_op)
+                    self.debug_op_publisher.publish(debug_msg_op)
+
+
+
 
 
 
@@ -325,6 +345,22 @@ class svea_platoon:
             debug_msg = FloatArray(data=debug)
             self.debug_publisher.publish(debug_msg)  
 
+    def create_control_publisher(self):
+        topic_name = "/" + self.vehicle_name + "/control"
+        self.control_publisher = rospy.Publisher(topic_name, FloatArray, queue_size = 1, tcp_nodelay = True) 
+
+    def create_state_publisher(self):
+        topic_name = "/" + self.vehicle_name + "/local_state"
+        self.state_publisher = rospy.Publisher(topic_name, FloatArray, queue_size = 1, tcp_nodelay = True)
+
+    def create_debug_publisher(self):
+        topic_name = "/" + self.vehicle_name + "/debug"
+        self.debug_publisher = rospy.Publisher(topic_name, FloatArray, queue_size = 1, tcp_nodelay = True) 
+
+    def create_debug_op_publisher(self):
+        topic_name = "/" + self.vehicle_name + "/debug_op"
+        self.debug_op_publisher = rospy.Publisher(topic_name, FloatArray, queue_size = 1, tcp_nodelay = True) 
+
     def create_subscription_to_leader(self):
         topic_name = "/" + self.leader_vehicle["vehicle_name"] + "/local_state"
         rospy.Subscriber(topic_name, FloatArray, self.update_leader_state, tcp_nodelay = True, queue_size = 1)
@@ -349,21 +385,10 @@ class svea_platoon:
         self.leader_vehicle["dkappa"] = msg.data[8]
         self.leader_vehicle["v_path"] = msg.data[9]
 
-    def create_control_publisher(self):
-        topic_name = "/" + self.vehicle_name + "/control"
-        self.control_publisher = rospy.Publisher(topic_name, FloatArray, queue_size = 1, tcp_nodelay = True) 
-
-    def create_state_publisher(self):
-        topic_name = "/" + self.vehicle_name + "/local_state"
-        self.state_publisher = rospy.Publisher(topic_name, FloatArray, queue_size = 1, tcp_nodelay = True)
-
-    def create_debug_publisher(self):
-        topic_name = "/" + self.vehicle_name + "/debug"
-        self.debug_publisher = rospy.Publisher(topic_name, FloatArray, queue_size = 1, tcp_nodelay = True) 
-
     def create_subscription_to_state(self):
         topic_name = "/qualisys/" + self.vehicle_name + "/odom"
         rospy.Subscriber(topic_name, Odometry, self.update_vehicle_state_mocap, tcp_nodelay = True, queue_size = 1)
+
 
     def update_vehicle_state_mocap(self, state):
         self.state_counter = 1
