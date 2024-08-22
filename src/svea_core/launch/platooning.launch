@@ -1,16 +1,11 @@
 <?xml version="1.0"?>
 <launch>
     <!-- Consumed topics -->
-    <arg name="image"/>
-    <arg name="aruco_pose"      default="aruco_pose"/>
-    <arg name="aruco_dict"      default="DICT_4X4_250"/>
-    <arg name="aruco_size"      default="0.1"/>
-    <arg name="aruco_tf_name"   default="aruco"/>
-	
     <arg name="nats"        default="true"/>
     <arg name="location"    default="sml"/>
     <arg name="name"        default="svea1"/>
-	
+	<arg name="leader_name"   default="svea0"/>
+    <!--
 	<group if="$(eval name == 'svea1')" >
 		<arg name="leader_name"   default="svea0"/>
 	</group>
@@ -26,6 +21,7 @@
 	<group if="$(eval name == 'svea5')" >
 		<arg name="leader_name"   default="svea4"/>
 	</group>
+    -->
 
     <!-- Start map server -->
     <node if="$(eval location == 'sml')" name="map_server" pkg="map_server" type="map_server" args="$(find svea_core)/maps/sml.yaml" output="screen"/>
@@ -73,24 +69,18 @@
         <rosparam subst_value="true">
         host: sml.dedyn.io
         subscribers:
-		  - /$(arg leader_name)/local_state
-		  - /$(arg leader_name)/control
+        - /$(arg leader_name)/local_state
+        - /$(arg leader_name)/control
         publishers:
-		  - /$(arg name)/local_state
-		  - /$(arg name)/control
+        - /$(arg name)/local_state
+        - /$(arg name)/control
         </rosparam>
     </node>	
 
     <!-- Nodes -->
 
-    <node name="vehicle" pkg="svea_core" type="platooning.py" output="screen">
+    <node name="vehicle" pkg="svea_core" type="onboard_platoon.py" output="screen">
         <!-- Topics -->
-        <param name="sub_image"         value="$(arg image)"/>
-        <param name="pub_aruco_pose"    value="$(arg aruco_pose)"/>
-        <param name="aruco_dict_name"   value="$(arg aruco_dict)"/>
-        <param name="aruco_size"        value="$(arg aruco_size)"/>
-        <param name="aruco_tf_name"     value="$(arg aruco_tf_name)"/>
-
         <rosparam subst_value="true">
         name: $(arg name)
         </rosparam>
