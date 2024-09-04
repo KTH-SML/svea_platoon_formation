@@ -44,7 +44,7 @@
         <!-- Waypoints for floo2 map -->
         <rosparam>
             name: "svea1"
-            state: [-7.4, -15.3, 0.9, 0.2] # initial state (x, y, yaw)
+            state: [1.0, -1.7, 1.1, 1.0] # initial state (x, y, yaw)
         </rosparam>
     </node>
 </launch>

@@ -72,7 +72,12 @@ class svea_platoon:
         ## Generate reference path
         wp_x = [-8, 10.5]
         wp_y = [-16, 11.7]
+
+        wp_x = [0.0, 0.9, 1.1, 0.8, 0.0, -0.8, -1.0, -0.8, -0.1]
+        wp_y = [-1.7, -1.4, 0.0, 0.8, 1.1, 0.8, 0.0, -1.4, -1.7]
         self.ref_path = CubicSpline2D(wp_x, wp_y)   
+        
+        wp_x, wp_y,_,_,_ = calc_spline_course(wp_x, wp_y, ds=0.2)
 
         ## Parameters for SVEA
         self.USE_RVIZ = load_param("~use_rviz", False)

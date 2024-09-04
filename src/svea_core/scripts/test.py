@@ -13,6 +13,10 @@ from svea.states import VehicleState
 from std_msgs.msg import Float32MultiArray as FloatArray
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from tf.transformations import quaternion_from_euler, euler_from_quaternion
+from nav_msgs.msg import Path
+from svea.simulators.viz_utils import publish_path
+from geometry_msgs.msg import Pose, PoseStamped, PoseArray
+
 
 ## import module for simulation
 from svea.models.bicycle import SimpleBicycleModel
@@ -54,6 +58,33 @@ def publish_initialpose(state, n=10):
         pub.publish(p)
         rate.sleep()
 
+def lists_to_pose_stampeds(x_list, y_list, yaw_list=None, t_list=None):
+    poses = []
+    for i in range(len(x_list)):
+        x = x_list[i]
+        y = y_list[i]
+
+        curr_pose = PoseStamped()
+        curr_pose.header.frame_id = 'map'
+        curr_pose.pose.position.x = x
+        curr_pose.pose.position.y = y
+
+        if not yaw_list is None:
+            yaw = yaw_list[i]
+            quat = tf.transformations.quaternion_from_euler(0.0, 0.0, yaw)
+            curr_pose.pose.orientation.x = quat[0]
+            curr_pose.pose.orientation.y = quat[1]
+            curr_pose.pose.orientation.z = quat[2]
+            curr_pose.pose.orientation.w = quat[3]
+
+        if not t_list is None:
+            t = t_list[i]
+            curr_pose.header.stamp = rospy.Time(secs = t)
+        else:
+            curr_pose.header.stamp = rospy.Time.now()
+
+        poses.append(curr_pose)
+    return poses
 
 class svea_platoon:
     def __init__(self):
@@ -63,7 +94,42 @@ class svea_platoon:
         ## Generate reference path
         wp_x = [-8, 10.5]
         wp_y = [-16, 11.7]
+
+        wp_x = [0.0, 0.9, 1.1, 0.8, 0.0, -0.8, -1.0, -0.8, 0.0]
+        wp_y = [-1.7, -1.4, 0.0, 0.8, 1.1, 0.8, 0.0, -1.4, -1.7]
+
+
+        #wp_x = [1.1, 0.8, 0.4, -0.3, -0.9]
+        #wp_y = [-1.7, 0,0.85,1.05,1.1]
+
         self.ref_path = CubicSpline2D(wp_x, wp_y)   
+        wp_x, wp_y,_,_,_ = calc_spline_course(wp_x, wp_y, ds=0.2)
+        
+        width = 0.5
+        lx, ly, rx, ry = calc_spline_edge(wp_x, wp_y, width, ds=0.2)
+
+        path_topic = "left_edge"
+        self.l_pub = \
+            rospy.Publisher(path_topic, Path, queue_size=1, latch=True)
+        path = Path()
+        path.header.stamp = rospy.Time.now()
+        path.header.frame_id = 'map'
+        path.poses = lists_to_pose_stampeds(lx, ly, None, None)
+        self.l_pub.publish(path)
+
+        path_topic = "right_edge"
+        self.r_pub = \
+            rospy.Publisher(path_topic, Path, queue_size=1, latch=True)
+        path = Path()
+        path.header.stamp = rospy.Time.now()
+        path.header.frame_id = 'map'
+        path.poses = lists_to_pose_stampeds(rx, ry, None, None)
+        self.r_pub.publish(path)
+
+
+        self.Vpub = rospy.Publisher('/Vehiclepose', PoseWithCovarianceStamped, queue_size = 1, tcp_nodelay = True) 
+        self.Ppub = rospy.Publisher('/Pathpose', PoseWithCovarianceStamped, queue_size = 1, tcp_nodelay = True) 
+
 
         ## Parameters for SVEA
         self.USE_RVIZ = load_param("~use_rviz", False)
@@ -130,12 +196,12 @@ class svea_platoon:
         self.ds_sample = []
         self.t_sample = []
         self.opflow_leader = 0
-        self.desired_velocity = 1  #set the desired platoon velocity
+        self.desired_velocity = 0.4  #set the desired platoon velocity
         self.desired_dist = 0.6      #set the desired platoon distance
-        self.k1 = 1
-        self.k2 = 1
-        self.k3 = 1
-        self.k4 = 1
+        self.k1 = 3
+        self.k2 = 3
+        self.k3 = 0
+        self.k4 = 5
         self.k5 = 5
         self.k6 = 0
 
@@ -143,12 +209,12 @@ class svea_platoon:
         self.error_sum = 0.0
         self.max_error_sum = 2
         self.K_p = 1.0
-        self.K_i = 0.2
+        self.K_i = 0.8
 
         self.target_velocity = self.desired_velocity
         self.target_steering = 0 #  kappa = tan(delta)/L
             
-        self.leader_vehicle = {"vehicle_name": index_dict[name_dict[self.vehicle_name]-1], "x":0.0, "y":0.0, "yaw":0.0, "v":0.0, "s_path":self.s_path+1.5, "yaw_path":0.0, "y_path":0.0, "kappa":0.0, "dkappa":0.0, "v_path":self.desired_velocity, "acc":0.0}
+        self.leader_vehicle = {"vehicle_name": index_dict[name_dict[self.vehicle_name]-1], "x":0.0, "y":0.0, "yaw":0.0, "v":0.0, "s_path":self.s_path+0.7, "yaw_path":0.0, "y_path":0.0, "kappa":0.0, "dkappa":0.0, "v_path":self.desired_velocity, "acc":0.0}
 
         self.control_timer = rospy.get_time()
         self.state_timer = rospy.get_time()
@@ -182,10 +248,18 @@ class svea_platoon:
         self.yaw = self.svea.state.yaw
         self.v = self.svea.state.v
 
+        yaw_raw = self.yaw
+
         self.s_path, self.x_p , self.y_p = self.ref_path.calc_closest_point_on_path(self.x, self.y)
 
         yaw_temp = self.ref_path.calc_yaw(self.s_path)
-        
+
+        if np.sign(self.yaw) != np.sign(yaw_temp) and (abs(self.yaw)>3 or abs(yaw_temp)>3):
+            if self.yaw < 0:
+                self.yaw = 2*np.pi + self.yaw
+            elif yaw_temp < 0:
+                yaw_temp = 2*np.pi + yaw_temp
+                    
         self.yaw_path = self.yaw - yaw_temp
         self.y_path =  (self.x - self.x_p)*np.cos(yaw_temp+np.pi/2) + (self.y- self.y_p)*np.sin(yaw_temp+np.pi/2)
         self.kappa = self.ref_path.calc_curvature(self.s_path)
@@ -199,6 +273,28 @@ class svea_platoon:
         dkappa = self.kappa
         tild_v = v - self.desired_velocity
 
+
+        p = PoseWithCovarianceStamped()
+        p.header.frame_id = 'map'
+        p.pose.pose.position.x = self.x
+        p.pose.pose.position.y = self.y
+
+        q = quaternion_from_euler(0, 0, self.yaw)
+        p.pose.pose.orientation.z = q[2]
+        p.pose.pose.orientation.w = q[3]
+        self.Vpub.publish(p)
+
+
+        p = PoseWithCovarianceStamped()
+        p.header.frame_id = 'map'
+        p.pose.pose.position.x = self.x_p
+        p.pose.pose.position.y = self.y_p
+
+        q = quaternion_from_euler(0, 0, yaw_temp)
+        p.pose.pose.orientation.z = q[2]
+        p.pose.pose.orientation.w = q[3]
+        self.Ppub.publish(p)
+
         #add case for vehicle 1!!
         if self.leader_vehicle["vehicle_name"] == "svea0":   
             current_time = rospy.get_time()
@@ -210,11 +306,30 @@ class svea_platoon:
             self.leader_vehicle["acc"] = 0.0
             leader_s = self.leader_vehicle["s_path"]
             self.leader_vehicle["s_path"] = self.leader_vehicle["s_path"] + self.leader_vehicle["v_path"] * delta_time
+            if self.leader_vehicle["s_path"] - self.s_path>= self.ref_path.sx.x[-1]:
+                self.leader_vehicle["s_path"] = self.leader_vehicle["s_path"] - self.ref_path.sx.x[-1]
+            
+            
+            if leader_s - self.s_path>= self.ref_path.sx.x[-1]:
+                leader_s = leader_s - self.ref_path.sx.x[-1]
+
+            ds = leader_s - self.s_path - self.r_g        
+            alpha1 = 1
+            alpha2 = 1
+            epsilon = 0.1
+            measurement = np.log(ds)
+            self.log_ds_estimate = self.log_ds_estimate + delta_time*(self.op_estimate + (alpha1/epsilon)*(measurement - self.log_ds_estimate))
+            self.op_estimate = self.op_estimate + delta_time*((alpha2/epsilon)*(measurement - self.log_ds_estimate))
+
+            self.op_real = (self.leader_vehicle["v_path"] - self.v_path)/ds
+            debug_op = [ds, measurement, self.log_ds_estimate, self.op_estimate, self.op_real]  #wrap the local state into a FloatArray
+            debug_msg_op = FloatArray(data=debug_op)
+            self.debug_op_publisher.publish(debug_msg_op)
 
 
         tild_s = self.leader_vehicle["s_path"] - self.s_path
         tild_nu = self.leader_vehicle["v_path"] - self.v_path
-        
+
         if tild_y >= self.road_width_left - self.road_width/2:
             opflow_wall = self.opflow_wall_left
         else:
@@ -224,18 +339,18 @@ class svea_platoon:
             tild_theta = 1e-9
                 
         tild_e = tild_s - self.desired_dist
-        
+
         vehicle_kappa = -self.k1*tild_y*np.sin(tild_theta)/tild_theta - self.k2*np.sign(v)*tild_theta - self.k3*np.sign(v)*opflow_wall + kappa*np.cos(tild_theta)/(1-kappa*tild_y)
 
+        #self.opflow_leader = self.op_estimate
         acc = self.leader_vehicle["acc"] + self.k4*tild_e + self.k5*tild_nu + self.k6*self.opflow_leader
-        
         
         dtild_theta = v*(vehicle_kappa - kappa*np.cos(tild_theta)/(1-kappa*tild_y))
         vehicle_acc = 1/np.cos(tild_theta)*(acc*(1-kappa*tild_y))+v*np.sin(tild_theta)*dtild_theta-self.v_path*(dkappa*self.v_path*tild_y+kappa*v*np.sin(tild_theta))
 
         self.target_velocity = v + self.control_dt * vehicle_acc 
-        self.target_steering = np.arctan2(vehicle_kappa, self.L) #  kappa = tan(delta)/L
-
+        self.target_steering = np.arctan2(vehicle_kappa*self.L,1.0) #  kappa = tan(delta)/L
+        
         current_time = rospy.get_time()
         delta_time = current_time - self.pid_timer
         self.pid_timer = current_time
@@ -254,7 +369,7 @@ class svea_platoon:
         speed_val = self.target_velocity + correction
         if speed_val <= 0:
             speed_val = 0
-        
+
         #send control to low level
         self.svea.send_control(self.target_steering, speed_val)
 
@@ -263,7 +378,7 @@ class svea_platoon:
         self.control_publisher.publish(control_input_msg)
         
         #debug = [tild_e, tild_nu, self.v_path, vehicle_acc, self.target_velocity, v, self.leader_vehicle["s_path"] - self.s_path, tild_y*np.sin(tild_theta)/tild_theta, self.target_steering, vehicle_kappa, np.sign(v)*tild_theta]  #wrap the local state into a FloatArray
-        debug = [v, self.v_path, tild_v, tild_s, tild_e, self.leader_vehicle["s_path"], self.s_path, acc, vehicle_acc, self.target_velocity]
+        debug = [v, self.v_path, self.k5*tild_nu, tild_s, self.k4*tild_e, self.leader_vehicle["s_path"], self.s_path, acc, vehicle_acc, self.target_velocity, tild_theta, tild_y, yaw_temp, self.target_steering, self.yaw, vehicle_kappa, kappa, kappa*np.cos(tild_theta)/(1-kappa*tild_y), -self.k1*tild_y*np.sin(tild_theta)/tild_theta, -self.k2*tild_theta]
         debug_msg = FloatArray(data=debug)
         self.debug_publisher.publish(debug_msg)  
 

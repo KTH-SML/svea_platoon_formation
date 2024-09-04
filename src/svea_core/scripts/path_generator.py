@@ -324,8 +324,42 @@ class CubicSpline2D:
             if abs(s_new - s) < tol:
                 break
             s = s_new
-        return s, self.sx.calc_position(s), self.sy.calc_position(s)
-            
+        s1 = s
+        dist1 = (px-self.sx.calc_position(s1))**2 + (py - self.sy.calc_position(s1))**2
+        
+        if index == 0:
+            index = -1
+            back_index = -2
+        else:
+            back_index = index -1
+
+        rate = 0.05
+        tol = 1e-4
+        max_iter = 100
+        s_init = self.sx.x[back_index]
+        s = s_init
+        for _ in range(max_iter):
+            grad = self.dist_gradient(s, px, py)
+            s_new = s - rate*grad
+
+            # handle case when s_new lie outside the path range
+            if s_new <= self.sx.x[back_index]:
+                s_new = self.sx.x[back_index]
+                break
+            elif s_new >= self.sx.x[index]:
+                s_new = self.sx.x[index]
+                break
+
+            if abs(s_new - s) < tol:
+                break
+            s = s_new
+        s2 = s
+        dist2 = (px-self.sx.calc_position(s2))**2 + (py - self.sy.calc_position(s2))**2
+
+        if dist1 < dist2:   
+            return s1, self.sx.calc_position(s1), self.sy.calc_position(s1)
+        else:
+            return s2, self.sx.calc_position(s2), self.sy.calc_position(s2)
 
     def calc_curvature(self, s):
         """
@@ -398,3 +432,24 @@ def calc_spline_course(x, y, ds=0.1):
         rk.append(sp.calc_curvature(i_s))
 
     return rx, ry, ryaw, rk, s
+
+
+def calc_spline_edge(x, y, width, ds=0.1):
+    sp = CubicSpline2D(x, y)
+    s = list(np.arange(0, sp.s[-1], ds))
+
+    lx, ly, rx, ry= [], [], [], []
+    for i_s in s:
+        ix, iy = sp.calc_position(i_s)
+        yaw = sp.calc_yaw(i_s)
+        lix = ix + width*np.cos(yaw+np.pi/2)
+        liy = iy + width*np.sin(yaw+np.pi/2)
+        lx.append(lix)
+        ly.append(liy)
+
+        rix = ix - width*np.cos(yaw+np.pi/2)
+        riy = iy - width*np.sin(yaw+np.pi/2)
+        rx.append(rix)
+        ry.append(riy)
+
+    return lx, ly, rx, ry

@@ -1,33 +1,35 @@
 #! /usr/bin/env python3
 
-from path_generator import *
-
 import numpy as np
-import time
 from scipy.signal import savgol_filter
 
+## import path generator function
+from path_generator import *
+
+## import rospy and useful message type
 import rospy
 from std_msgs.msg import Float32MultiArray as FloatArray
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseWithCovarianceStamped
+from nav_msgs.msg import Path
+from svea.simulators.viz_utils import publish_path
+from geometry_msgs.msg import Pose, PoseStamped, PoseArray
 from tf.transformations import quaternion_from_euler, euler_from_quaternion
 
-
+## import svea interfaces
 from svea.states import VehicleState
 from svea.interfaces import LocalizationInterface
 from svea.controllers.pure_pursuit import PurePursuitController
 from svea.svea_managers.svea_archetypes import SVEAManager
 from svea.data import TrajDataHandler, RVIZPathHandler
 
+## import computer vision packages
 import cv2
 from cv2 import aruco
 from cv_bridge import CvBridge
 import message_filters as mf
 from sensor_msgs.msg import Image, CameraInfo
 
-from nav_msgs.msg import Path
-from svea.simulators.viz_utils import publish_path
-from geometry_msgs.msg import Pose, PoseStamped, PoseArray
 
 
 def load_param(name, value=None):
@@ -47,7 +49,6 @@ def replace_base(old, new):
 
 
 def publish_initialpose(state, n=10):
-
     p = PoseWithCovarianceStamped()
     p.header.frame_id = 'map'
     p.pose.pose.position.x = state.x
@@ -98,33 +99,29 @@ class svea_platoon:
 
         ## Initialize ROS Node
         rospy.init_node("svea_platoon")
-
         ## Generate reference path
         #wp_x = [1.5, -1.5]
-        #wp_y = [-2.5, 2.5]
-        
+        #wp_y = [-2.5, 2.5]       
         #wp_x = [1.5, 1.2, 0.2, -0.57]
         #wp_y = [-2.5, 0.4,0.8,1.1]
 
         wp_x = [1.1, 0.8, 0.4, -0.3, -0.9]
         wp_y = [-1.7, 0,0.85,1.05,1.1]
         self.ref_path = CubicSpline2D(wp_x, wp_y)   
-
         wp_x, wp_y,_,_,_ = calc_spline_course(wp_x, wp_y, ds=0.2)
 
         ## Parameters for SVEA
         self.USE_RVIS = load_param("~use_rvis", False)
         self.STATE = load_param("~state", [0, 0, 0, 0])
-        
+        state = VehicleState(*self.STATE)
+        publish_initialpose(state)      
+
+
         name_dict = {"svea0":0, "svea1":1, "svea2":2, "svea3":3, "svea4":4, "svea5":5}
         index_dict = {0:"svea0", 1:"svea1", 2:"svea2", 3:"svea3", 4:"svea4", 5:"svea5"}
         self.marker_dict = {"svea0":0, "svea1":1, "svea2":2, "svea3":3, "svea4":4, "svea5":5}
         self.vehicle_name = load_param("~name")
         
-
-        state = VehicleState(*self.STATE)
-        publish_initialpose(state)
-
 
         # is the mapping correct here?
         self.x = state.x
@@ -145,6 +142,7 @@ class svea_platoon:
         self.svea = SVEAManager(LocalizationInterface, PurePursuitController, data_handler = RVIZPathHandler if self.USE_RVIS else TrajDataHandler)
         self.svea.start(wait = True)
 
+        # Publish the planned path
         self.svea.data_handler.update_traj(wp_x,wp_y)
         path_topic = "path_plan"
         self.path_plan_pub = \
@@ -152,13 +150,10 @@ class svea_platoon:
         path = Path()
         path.header.stamp = rospy.Time.now()
         path.header.frame_id = 'mocap'
-
         path.poses = lists_to_pose_stampeds(wp_x, wp_y, None, None)
         self.path_plan_pub.publish(path)
         
         self.control_dt = 0.1
-
-
         self.road_width_left = 0.5
         self.road_width_right = 0.5
         self.road_width = 1
@@ -181,6 +176,9 @@ class svea_platoon:
         self.k4 = 4
         self.k5 = 5
         self.k6 = 1
+
+        self.log_ds_estimate = 0.0
+        self.op_estimate = -0.4
 
         self.L = 0.324               #wheel base length
         self.error_sum = 0.0
