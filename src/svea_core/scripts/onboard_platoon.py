@@ -170,21 +170,21 @@ class svea_platoon:
         self.opflow_leader = 0
         self.desired_velocity = 0.4  #set the desired platoon velocity
         self.desired_dist = 0.6      #set the desired platoon distance
-        self.k1 = 1
-        self.k2 = 1
-        self.k3 = 1
-        self.k4 = 4
+        self.k1 = 3
+        self.k2 = 3
+        self.k3 = 0
+        self.k4 = 5
         self.k5 = 5
-        self.k6 = 1
+        self.k6 = 0
 
         self.log_ds_estimate = 0.0
         self.op_estimate = -0.4
 
         self.L = 0.324               #wheel base length
         self.error_sum = 0.0
-        self.max_error_sum = 0.06
+        self.max_error_sum = 2
         self.K_p = 1.0
-        self.K_i = 0.2
+        self.K_i = 0.8
 
         self.target_velocity = self.desired_velocity
         self.target_steering = 0 #  kappa = tan(delta)/L
@@ -234,8 +234,6 @@ class svea_platoon:
             v = self.v
             kappa = self.kappa
             dkappa = self.kappa
-            tild_v = v - self.desired_velocity
-
             
             if self.control_counter == 0:
                 #add case for vehicle 1!!
@@ -247,7 +245,7 @@ class svea_platoon:
                     self.leader_vehicle["v"] = self.desired_velocity
                     self.leader_vehicle["v_path"] = self.desired_velocity
                     self.leader_vehicle["acc"] = 0.0
-                    self.leader_vehicle["s_path"] = self.s_path + 1
+                    self.leader_vehicle["s_path"] = self.s_path + 0.6
                     self.control_counter = 1
             else:
                 #add case for vehicle 1!!
@@ -263,6 +261,13 @@ class svea_platoon:
                     leader_s = self.leader_vehicle["s_path"]
 
                     self.leader_vehicle["s_path"] = self.leader_vehicle["s_path"] + self.leader_vehicle["v_path"] * delta_time
+                    if self.leader_vehicle["s_path"] - self.s_path>= self.ref_path.sx.x[-1]:
+                        self.leader_vehicle["s_path"] = self.leader_vehicle["s_path"] - self.ref_path.sx.x[-1]
+            
+            
+                    if leader_s - self.s_path>= self.ref_path.sx.x[-1]:
+                        leader_s = leader_s - self.ref_path.sx.x[-1]
+
 
                     ds = leader_s - self.s_path - self.r_g        
                     alpha1 = 1
@@ -277,21 +282,9 @@ class svea_platoon:
                     debug_msg_op = FloatArray(data=debug_op)
                     self.debug_op_publisher.publish(debug_msg_op)
 
-
-
-
-
-
             tild_s = self.leader_vehicle["s_path"] - self.s_path
             tild_nu = self.leader_vehicle["v_path"] - self.v_path
             
-            rospy.loginfo('-----')
-            #rospy.loginfo(self.leader_vehicle["s_path"])
-            #rospy.loginfo(self.s_path)
-            #rospy.loginfo(tild_s - self.desired_dist)
-            #rospy.loginfo(tild_nu)
-            #rospy.loginfo(tild_y)
-            #rospy.loginfo(tild_theta)
             if tild_y >= self.road_width_left - self.road_width/2:
                 opflow_wall = self.opflow_wall_left
             else:
@@ -310,7 +303,7 @@ class svea_platoon:
             
                 
             self.target_velocity = v + self.control_dt * vehicle_acc 
-            self.target_steering = np.arctan2(vehicle_kappa, self.L) #  kappa = tan(delta)/L
+            self.target_steering = np.arctan2(vehicle_kappa*self.L, 1.0) #  kappa = tan(delta)/L
 
             current_time = rospy.get_time()
             delta_time = current_time - self.pid_timer
@@ -400,7 +393,14 @@ class svea_platoon:
         self.s_path, self.x_p , self.y_p = self.ref_path.calc_closest_point_on_path(self.x, self.y)
 
         yaw_temp = self.ref_path.calc_yaw(self.s_path)
-        
+
+        #to handle actan discontinuity
+        if np.sign(self.yaw) != np.sign(yaw_temp) and (abs(self.yaw)>3 or abs(yaw_temp)>3):
+            if self.yaw < 0:
+                self.yaw = 2*np.pi + self.yaw
+            elif yaw_temp < 0:
+                yaw_temp = 2*np.pi + yaw_temp
+
         self.yaw_path = self.yaw - yaw_temp
         self.y_path =  (self.x - self.x_p)*np.cos(yaw_temp+np.pi/2) + (self.y- self.y_p)*np.sin(yaw_temp+np.pi/2)
         self.kappa = self.ref_path.calc_curvature(self.s_path)
