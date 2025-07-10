@@ -1,0 +1,61 @@
+<?xml version="1.0"?>
+<launch>
+    <!-- Consumed topics -->
+    <arg name="nats"        default="true"/>
+    <arg name="location"    default="sml"/>
+    <arg name="name"        default="svea1"/>
+	<arg name="leader_name"   default="svea0"/>
+
+    <!-- Start map server -->
+    <node if="$(eval location == 'sml')" name="map_server" pkg="map_server" type="map_server" args="$(find svea_core)/maps/sml.yaml" output="screen"/>
+
+    <!-- Start low-level interface -->
+    <node name="serial_node" pkg="rosserial_python" type="serial_node.py">
+        <param name="port" value="/dev/ttyACM0"/>
+        <param name="baud" value="250000"/>
+    </node>
+    
+    <!-- Motion Capture System -->
+    <group if="$(eval location == 'sml')">
+        <arg name="mocap_address" value="10.0.0.10"/>
+        <arg name="mocap_name"    value="$(arg name)"/>
+
+        <include file="$(find mocap_qualisys)/launch/qualisys.launch">
+            <arg name="server_address" value="$(arg mocap_address)"/>
+        </include>
+
+        <include file="$(find svea_mocap)/launch/map_correction.launch">
+            <arg name="map" value="sml"/>
+        </include>
+
+        <!-- Static Transforms-->
+        <include file="$(find svea_sensors)/launch/transforms.launch"/>
+        <node name="tf_lidar_to_base_link" pkg="tf" type="static_transform_publisher" args="0 0 -0.2 0 0 0 $(arg name) base_link 100" />
+        <node name="tf_odom_to_base_link" pkg="tf" type="static_transform_publisher" args="0 0 0 0 0 0 base_link odom 100" />
+    </group>
+
+
+    <!-- Start NATS -->
+    <node if="$(arg nats)" name="nats_connector" pkg="nats_ros_connector" type="nats_connector.py" output="screen">
+        <remap from="$(arg name)/path"  to="path"/>
+        <rosparam subst_value="true">
+        host: sml.dedyn.io
+        subscribers:
+        - /$(arg leader_name)/local_state
+        - /$(arg leader_name)/control
+        publishers:
+        - /$(arg name)/local_state
+        - /$(arg name)/control
+        </rosparam>
+    </node>	
+
+    <!-- Nodes -->
+
+    <node name="vehicle" pkg="svea_core" type="svea1.py" output="screen">
+        <!-- Topics -->
+        <rosparam subst_value="true">
+        name: $(arg name)
+        </rosparam>
+    </node>
+
+</launch>
